@@ -5,11 +5,13 @@ import puppeteer from "puppeteer-core";
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { serve } from "./serve.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const shots = path.join(here, "shots");
 mkdirSync(shots, { recursive: true });
 
+const server = await serve();
 const browser = await puppeteer.launch({ executablePath: "/usr/bin/google-chrome", headless: true, args: ["--no-sandbox"] });
 const page = await browser.newPage();
 await page.setViewport({ width: 1280, height: 800 });
@@ -42,7 +44,8 @@ await page.evaluateOnNewDocument(() => {
               return c ? [{ id: c.id, reason }] : [];
             };
             const items = [...pick(/Estimated cost/, "Shows the cost figures behind the plan"), ...pick(/framework agreement caps/, "Explains the spending cap it mentions"), ...pick(/pay the levy/, "Says who pays the business charge")];
-            setTimeout(() => emit({ type: "related", items }), 500);
+            const images = msg.imageCandidates.filter((c) => /route|cost-chart/.test(c.url)).map((c) => ({ id: c.id, reason: "Shows something this block is about" }));
+            setTimeout(() => emit({ type: "related", items, images }), 500);
           },
         };
       },
@@ -51,7 +54,7 @@ await page.evaluateOnNewDocument(() => {
   Object.defineProperty(window, "chrome", { value: stub, configurable: true });
 });
 
-await page.goto("file://" + path.join(here, "demo.html"));
+await page.goto(server.url);
 await page.addScriptTag({ path: path.join(here, "..", "content", "content.js") });
 
 const shadowEval = (fn, ...args) => page.evaluate(fn, ...args);
@@ -84,7 +87,7 @@ const state = await shadowEval(() => {
     panelText: s.querySelector(".content").innerText.slice(0, 40),
     desc: s.querySelector(".desc-text").textContent.length,
     busy: s.querySelector("[aria-live]").getAttribute("aria-busy"),
-    cards: s.querySelectorAll("button.card").length,
+    cards: s.querySelectorAll("button.card:not(.thumb)").length,
     focusInPanel: s.activeElement?.classList.contains("panel"),
     inert: document.body.inert,
     candidates: window.__posted[0].candidates.length,
@@ -132,6 +135,63 @@ await page.keyboard.up("Alt");
 await sleep(600);
 check("opens under reduced motion", await shadowEval(() => !!document.querySelector("[data-lift-out]").shadowRoot.querySelector('[role="dialog"]')));
 
+await page.keyboard.press("Escape");
+await sleep(400);
+await page.emulateMediaFeatures([{ name: "prefers-reduced-motion", value: "no-preference" }]);
+
+// 8. Lifting an image: Alt+click the chart.
+const root = () => document.querySelector("[data-lift-out]").shadowRoot;
+const altClick = async (selector) => {
+  const el = await page.$(selector);
+  await el.evaluate((n) => n.scrollIntoView({ block: "center" }));
+  const b = await el.boundingBox();
+  await page.keyboard.down("Alt");
+  await page.mouse.click(b.x + b.width / 2, b.y + b.height / 2);
+  await page.keyboard.up("Alt");
+  await sleep(2200);
+};
+await altClick("#chart img");
+await page.screenshot({ path: path.join(shots, "6-image.png") });
+const img = await page.evaluate(() => {
+  const s = document.querySelector("[data-lift-out]").shadowRoot;
+  const msg = window.__posted.at(-1);
+  return {
+    kind: msg.block.kind,
+    sent: msg.block.images.map((i) => i.url),
+    caption: msg.block.caption,
+    nearby: !!msg.block.nearby.before,
+    imageCandidates: msg.imageCandidates.map((c) => c.url.split("/").pop()),
+    figureAsText: msg.candidates.some((c) => /four new stops/.test(c.text)),
+    panelImg: !!s.querySelector(".content.media img"),
+    label: s.querySelector(".desc .label").textContent,
+    thumbs: s.querySelectorAll("button.card.thumb").length,
+    imagesFirst: s.querySelector(".related-wrap .group .thumbs") !== null,
+  };
+});
+console.log(img);
+check("figure lifted as an image with caption and nearby text", img.kind === "image" && /cost-chart/.test(img.sent[0]) && /Cost estimates/.test(img.caption) && img.nearby && img.panelImg && img.label === "What this shows");
+check("other images offered as candidates, advert kept out of nav", img.imageCandidates.includes("route-map.png") && !img.imageCandidates.includes("cost-chart.png") && !img.figureAsText);
+check("related image thumbnail shown", img.thumbs === 1 && img.imagesFirst);
+
+// 9. Clicking the thumbnail swaps to that image.
+await page.evaluate(() => document.querySelector("[data-lift-out]").shadowRoot.querySelector("button.card.thumb").click());
+await sleep(2200);
+check("thumbnail swap shows the map", await page.evaluate(() => /route-map/.test(document.querySelector("[data-lift-out]").shadowRoot.querySelector(".content img").src)));
+await page.keyboard.press("Escape");
+await sleep(800);
+
+// 10. Inline SVG chart is snapshotted for the model and the panel.
+await altClick("#votes");
+await page.screenshot({ path: path.join(shots, "7-svg.png") });
+const svg = await page.evaluate(() => {
+  const s = document.querySelector("[data-lift-out]").shadowRoot;
+  const msg = window.__posted.at(-1);
+  return { kind: msg.block.kind, data: (msg.block.images[0]?.dataUrl || "").slice(0, 23), size: (msg.block.images[0]?.dataUrl || "").length, panel: (s.querySelector(".content img")?.src || "").slice(0, 23) };
+});
+console.log(svg);
+check("inline SVG sent and shown as a picture", svg.kind === "image" && svg.data === "data:image/jpeg;base64," && svg.size > 3000 && svg.panel === svg.data);
+
 check("no page errors", errors.length === 0);
 if (errors.length) console.log(errors);
 await browser.close();
+server.close();

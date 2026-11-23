@@ -15,6 +15,9 @@
       table { border-collapse: collapse; font: 13px sans-serif; } td, th { border: 1px solid #bbb; padding: 4px 10px; }
       .cookie { position: fixed; bottom: 0; left: 0; right: 0; background: #223; color: #dde; padding: 12px 24px; font: 13px sans-serif; }
       .cookie button { margin-left: 10px; } .cookie a { color: #889; font-size: 11px; }
+      figure { margin: 16px 0; } figcaption { font: 12px sans-serif; color: #777; }
+      .ad { height: auto; line-height: 0; background: none; }
+      .votes .for { fill: #2a7; } .votes .against { fill: #c54; } .votes text { font: bold 15px sans-serif; fill: #333; }
       footer { text-align: center; font: 12px sans-serif; color: #888; padding: 30px; }
     </style>
   </head>
@@ -29,13 +32,17 @@
           authority says will be funded through a mix of a municipal bond issuance and a ring-fenced levy on commercial
           ratepayers within the Eastside catchment, subject to the capex ceiling set out in the 2024 framework agreement.<sup><a href="#fn1">1</a></sup>
         </p>
-        <div class="ad">HOT DEALS ON TYRES — CLICK NOW</div>
+        <div class="ad"><img src="img/tyres-ad.png" alt="Tyre sale advert" width="468" height="90" /></div>
         <h2>What it will cost</h2>
         <p id="cost">
           Officials put the capital cost at 184 million, up from the 151 million estimated two years ago. The authority
           attributes most of the increase to utility relocation along Quay Street and says the figures in the table
           below include a 12 percent contingency.
         </p>
+        <figure id="chart">
+          <img src="img/cost-chart.png" alt="" width="560" height="320" />
+          <figcaption>Cost estimates in 2023 and 2025. Source: transport authority.</figcaption>
+        </figure>
         <table id="costs">
           <caption>Estimated cost by component (millions)</caption>
           <tr><th>Component</th><th>2023 estimate</th><th>2025 estimate</th></tr>
@@ -49,6 +56,15 @@
           properties are exempt. Business owners on Quay Street said the charge arrives just as construction will cut
           foot traffic to their shops.
         </p>
+        <figure id="map">
+          <img src="img/route-map.png" alt="Map of the Phase 2 tram route" width="560" height="220" />
+          <figcaption>The four new stops on the Phase 2 route.</figcaption>
+        </figure>
+        <h2>How the council voted</h2>
+        <svg id="votes" class="votes" viewBox="0 0 320 120" width="320" height="120" role="img">
+          <rect class="for" x="10" y="20" width="198" height="34" /><text x="216" y="43">For: 9</text>
+          <rect class="against" x="10" y="66" width="88" height="34" /><text x="106" y="89">Against: 4</text>
+        </svg>
         <h2>What happens next</h2>
         <p id="next">
           Construction tenders open in March. Residents can comment on the stop locations until the end of January

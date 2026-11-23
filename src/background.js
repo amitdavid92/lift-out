@@ -17,28 +17,69 @@ function explain(err) {
   return `Something went wrong: ${err?.message || err}`;
 }
 
-async function streamDescription(client, block, post, signal) {
-  let sent = false;
-  const attempt = async (withImages) => {
-    const stream = client.beta.messages.stream(describeRequest(block, { withImages }), { signal });
+// ---------- images ----------
+
+async function toBase64(blob) {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  return btoa(binary);
+}
+
+// Turns an image reference from the page ({url} or {dataUrl}) into an API
+// image source. The image is downloaded here, scaled so its long edge is at
+// most `maxEdge`, and re-encoded as JPEG, which makes any format Chrome can
+// decode acceptable to the API and keeps requests small. If that fails, a
+// public https address is passed through for the API to fetch itself.
+async function toSource(ref, maxEdge, signal) {
+  if (!ref) return null;
+  try {
+    const res = await fetch(ref.dataUrl || ref.url, { signal });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const blob = await res.blob();
+    if (blob.size > 25e6) throw new Error("too large");
+    const bitmap = await createImageBitmap(blob);
+    const scale = Math.min(1, maxEdge / Math.max(bitmap.width, bitmap.height));
+    const w = Math.max(1, Math.round(bitmap.width * scale));
+    const h = Math.max(1, Math.round(bitmap.height * scale));
+    const canvas = new OffscreenCanvas(w, h);
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#fff"; // transparent areas would otherwise turn black in JPEG
+    ctx.fillRect(0, 0, w, h);
+    ctx.drawImage(bitmap, 0, 0, w, h);
+    bitmap.close();
+    const jpeg = await canvas.convertToBlob({ type: "image/jpeg", quality: 0.88 });
+    return { type: "base64", media_type: "image/jpeg", data: await toBase64(jpeg) };
+  } catch {
+    return ref.url && /^https:/.test(ref.url) ? { type: "url", url: ref.url } : null;
+  }
+}
+
+const isBadRequest = (err) => err instanceof Anthropic.BadRequestError;
+const embedded = (source) => source?.type === "base64";
+
+// ---------- the two requests ----------
+
+async function streamDescription(client, block, blockImages, post, signal) {
+  const attempt = async (images) => {
+    const stream = client.beta.messages.stream(describeRequest(block, images), { signal });
     for await (const event of stream) {
       if (event.type === "content_block_delta" && event.delta.type === "text_delta") {
-        sent = true;
         post({ type: "delta", text: event.delta.text });
       }
     }
     return stream.finalMessage();
   };
 
+  const images = (await blockImages).filter((img) => img.source);
   let message;
   try {
-    message = await attempt(true);
+    message = await attempt(images);
   } catch (err) {
-    // Image URLs the API cannot fetch (private, unsupported type) fail the
-    // whole request, so retry once with text only.
-    const canRetry = err instanceof Anthropic.BadRequestError && block.images?.length && !sent;
-    if (!canRetry) throw err;
-    message = await attempt(false);
+    // An image address the API cannot fetch fails the whole request (before
+    // any text is produced), so retry once with only the images we embedded.
+    if (!isBadRequest(err) || images.every((img) => embedded(img.source))) throw err;
+    message = await attempt(images.filter((img) => embedded(img.source)));
   }
 
   if (message.stop_reason === "refusal") {
@@ -48,11 +89,33 @@ async function streamDescription(client, block, post, signal) {
   }
 }
 
-async function findRelated(client, block, candidates, post, signal) {
-  if (!candidates.length) return post({ type: "related", items: [] });
-  const message = await client.beta.messages.create(relatedRequest(block, candidates), { signal });
-  if (message.stop_reason === "refusal") return post({ type: "related", items: [] });
-  post({ type: "related", items: parseRelated(message, candidates.length) });
+async function findRelated(client, block, blockImages, candidates, imageRefs, post, signal) {
+  if (!candidates.length && !imageRefs.length) return post({ type: "related", items: [], images: [] });
+
+  const [first, imageCandidates] = await Promise.all([
+    blockImages.then((imgs) => imgs.find((img) => img.source)?.source || null),
+    Promise.all(imageRefs.map(async (c) => ({ ...c, source: await toSource({ url: c.url }, 512, signal) }))),
+  ]);
+
+  const attempt = (allowUrls) => {
+    const ok = (source) => (source && (allowUrls || embedded(source)) ? source : null);
+    const request = relatedRequest(block, candidates, {
+      blockImage: ok(first),
+      imageCandidates: imageCandidates.map((c) => ({ ...c, source: ok(c.source) })),
+    });
+    return client.beta.messages.create(request, { signal });
+  };
+
+  let message;
+  try {
+    message = await attempt(true);
+  } catch (err) {
+    const usedUrl = [first, ...imageCandidates.map((c) => c.source)].some((s) => s?.type === "url");
+    if (!isBadRequest(err) || !usedUrl) throw err;
+    message = await attempt(false);
+  }
+  if (message.stop_reason === "refusal") return post({ type: "related", items: [], images: [] });
+  post({ type: "related", ...parseRelated(message, candidates.length, imageCandidates.length) });
 }
 
 chrome.runtime.onConnect.addListener((port) => {
@@ -83,9 +146,14 @@ chrome.runtime.onConnect.addListener((port) => {
         post({ type: errorType, message: explain(err) });
       });
 
+    const { block, candidates = [], imageCandidates = [] } = msg;
+    const signal = controller.signal;
+    // Prepared once and shared by both requests.
+    const blockImages = Promise.all((block.images || []).map(async (ref) => ({ alt: ref.alt, source: await toSource(ref, 1568, signal) })));
+
     await Promise.all([
-      guard(streamDescription(client, msg.block, post, controller.signal), "desc-error"),
-      guard(findRelated(client, msg.block, msg.candidates || [], post, controller.signal), "related-error"),
+      guard(streamDescription(client, block, blockImages, post, signal), "desc-error"),
+      guard(findRelated(client, block, blockImages, candidates, imageCandidates, post, signal), "related-error"),
     ]);
   });
 });

@@ -1,10 +1,10 @@
 {
   "manifest_version": 3,
   "name": "Lift Out",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Alt+click (Option+click on a Mac) any block on a page to lift it out, get a plain-language description, and see what it relates to.",
   "permissions": ["storage"],
-  "host_permissions": ["https://api.anthropic.com/*"],
+  "host_permissions": ["https://api.anthropic.com/*", "<all_urls>"],
   "background": { "service_worker": "dist/background.js" },
   "content_scripts": [
     {

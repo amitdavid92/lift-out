@@ -76,6 +76,8 @@
     .content table { border-collapse: collapse; width: 100%; font-size: .9em; }
     .content th, .content td { border: 1px solid var(--line); padding: 8px 10px; text-align: left; vertical-align: top; }
     .content figcaption { color: var(--muted); font-size: .85em; }
+    .content.media img { max-height: 52vh; width: auto; margin: 0 auto .5em; }
+    [hidden] { display: none !important; }
 
     .desc, .related-wrap { z-index: 1; }
     .desc {
@@ -116,6 +118,12 @@
       display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
       color: var(--muted); font-size: 14px; line-height: 1.45; margin-top: 6px;
     }
+    .group + .group { margin-top: 18px; }
+    .thumbs { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); }
+    .card.thumb { padding: 0; overflow: hidden; min-height: 0; }
+    .card.thumb img { display: block; width: 100%; height: 124px; object-fit: cover; background: var(--line); }
+    .card.thumb .why { padding: 10px 12px 12px; font-size: 15px; }
+    .card.thumb.placeholder { height: 170px; padding: 14px 16px; }
     .quiet { color: #fff; opacity: .85; font-size: 15px; margin: 0; text-shadow: 0 1px 4px rgba(0,0,0,.6); }
     .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 
@@ -183,16 +191,149 @@
   function blockFrom(node) {
     let n = node?.nodeType === 1 ? node : node?.parentElement;
     if (!n || host?.contains(n)) return null;
-    if (n.tagName === "IMG") n = n.closest("figure") || n;
     while (n && n !== document.body && n !== document.documentElement) {
       const r = n.getBoundingClientRect();
-      const isImg = n.tagName === "IMG";
-      const inline = !isImg && getComputedStyle(n).display.startsWith("inline");
-      const substantial = isImg || n.matches(MEDIA) || (n.innerText || "").trim().length >= 40;
-      if (!inline && substantial && r.width >= 120 && r.height >= 24) return n;
+      const isMedia = n.matches(MEDIA_EL);
+      const cs = getComputedStyle(n);
+      const inline = !isMedia && cs.display.startsWith("inline");
+      const picture = r.height >= 90 && BG_URL.test(cs.backgroundImage);
+      const substantial = isMedia || picture || n.matches(MEDIA) || (n.innerText || "").trim().length >= 40;
+      if (!inline && substantial && r.width >= 120 && r.height >= 24) return (isMedia && n.closest("figure")) || n;
       n = n.parentElement;
     }
     return null;
+  }
+
+  // ---------- images, charts and graphics ----------
+
+  const MEDIA_EL = "img, canvas, svg";
+  const BG_URL = /url\(["']?(https?:[^"')]+)["']?\)/;
+  const MAX_EDGE = 1568;
+
+  const bgUrl = (el) => BG_URL.exec(getComputedStyle(el).backgroundImage)?.[1] || null;
+  const textLength = (el) => (el.innerText || "").trim().length;
+  const altOf = (m) => (m.alt || m.getAttribute("aria-label") || m.querySelector?.("title")?.textContent || m.getAttribute("title") || "").trim().slice(0, 300);
+
+  // The pictures inside a block (or the block itself), ignoring icons.
+  function mediaIn(el) {
+    const all = el.matches(MEDIA_EL) ? [el] : [...el.querySelectorAll(MEDIA_EL)].filter((m) => !m.parentElement.closest("svg"));
+    const big = all.filter((m) => {
+      const r = m.getBoundingClientRect();
+      return r.width >= 100 && r.height >= 80;
+    });
+    if (!big.length && bgUrl(el)) return [el];
+    return big;
+  }
+
+  // A block counts as an image when it is a picture with at most a caption.
+  const isImageBlock = (el) => mediaIn(el).length > 0 && textLength(el) < 200;
+
+  function backdropColor(el) {
+    for (let n = el; n && n.nodeType === 1; n = n.parentElement) {
+      const c = getComputedStyle(n).backgroundColor;
+      if (c && c !== "transparent" && !/, 0\)$/.test(c)) return c;
+    }
+    return "#fff";
+  }
+
+  // Draws an image source onto a canvas and returns a JPEG data URL. Throws
+  // when the source is cross-origin (a "tainted" canvas).
+  function rasterize(source, w, h, background) {
+    const scale = Math.min(1, MAX_EDGE / Math.max(w, h, 1));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(w * scale));
+    canvas.height = Math.max(1, Math.round(h * scale));
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = background;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(source, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL("image/jpeg", 0.88);
+  }
+
+  const SVG_STYLE = "fill stroke stroke-width stroke-dasharray stroke-linecap stroke-linejoin opacity fill-opacity stroke-opacity font-family font-size font-weight font-style text-anchor dominant-baseline visibility display color".split(" ");
+
+  // Inline SVG (most web charts) is styled by the page's CSS, so copy the
+  // computed styles onto a clone before turning it into a picture.
+  async function svgSnapshot(svg) {
+    const r = svg.getBoundingClientRect();
+    const clone = svg.cloneNode(true);
+    const src = [svg, ...svg.querySelectorAll("*")];
+    const dst = [clone, ...clone.querySelectorAll("*")];
+    if (src.length > 4000) throw new Error("svg too complex");
+    src.forEach((node, i) => {
+      const cs = getComputedStyle(node);
+      for (const prop of SVG_STYLE) dst[i].style.setProperty(prop, cs.getPropertyValue(prop));
+    });
+    clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+    clone.setAttribute("width", r.width);
+    clone.setAttribute("height", r.height);
+    const img = new Image();
+    img.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(new XMLSerializer().serializeToString(clone));
+    await img.decode();
+    return rasterize(img, r.width * 2, r.height * 2, backdropColor(svg));
+  }
+
+  async function makeRef(el) {
+    const tag = el.tagName.toUpperCase();
+    if (tag === "IMG") {
+      const src = el.currentSrc || el.src;
+      if (/^https?:/.test(src)) return { url: src };
+      if (/^(data:image\/|blob:)/.test(src)) return { dataUrl: rasterize(el, el.naturalWidth, el.naturalHeight, "#fff") };
+      return null;
+    }
+    if (tag === "CANVAS") return { dataUrl: rasterize(el, el.width, el.height, backdropColor(el)) };
+    if (tag === "SVG") return { dataUrl: await svgSnapshot(el) };
+    const bg = bgUrl(el);
+    return bg ? { url: bg } : null;
+  }
+
+  // Where the model can get this picture: {url} for the extension to download,
+  // or {dataUrl} for graphics that only exist in this page. Null if neither.
+  const refs = new WeakMap();
+  function imageRef(el) {
+    if (!refs.has(el)) refs.set(el, makeRef(el).catch(() => null));
+    return refs.get(el);
+  }
+
+  function nearbyText(el) {
+    const grab = (dir) => {
+      let n = el;
+      for (let depth = 0; depth < 3 && n && n !== document.body; depth++, n = n.parentElement) {
+        for (let s = n[dir]; s; s = s[dir]) {
+          const t = (s.innerText || "").replace(/\s+/g, " ").trim();
+          if (t.length >= 60 && !s.matches(CHROME)) return t;
+        }
+      }
+      return "";
+    };
+    return { before: grab("previousElementSibling").slice(-500), after: grab("nextElementSibling").slice(0, 500) };
+  }
+
+  // Other sizeable images on the page, largest first, as related-image candidates.
+  function collectImages(target, limit = 8) {
+    const own = new Set(target ? mediaIn(target).map((m) => m.currentSrc || m.src) : []);
+    const seen = new Set();
+    const found = [];
+    for (const img of document.images) {
+      if (host?.contains(img) || img.closest(CHROME)) continue;
+      const el = img.closest("figure") || img;
+      if (target && (el === target || el.contains(target) || target.contains(el))) continue;
+      const src = img.currentSrc || img.src;
+      if (!/^https?:/.test(src) || seen.has(src) || own.has(src)) continue;
+      const r = img.getBoundingClientRect();
+      if (r.width < 120 || r.height < 90 || img.naturalWidth < 100) continue;
+      seen.add(src);
+      found.push({
+        el,
+        src,
+        area: r.width * r.height,
+        alt: altOf(img),
+        caption: (img.closest("figure")?.querySelector("figcaption")?.innerText || "").trim().slice(0, 300),
+        heading: headingFor(el),
+      });
+    }
+    const keep = new Set([...found].sort((a, b) => b.area - a.area).slice(0, limit));
+    return found.filter((f) => keep.has(f));
   }
 
   function headingFor(el) {
@@ -211,10 +352,12 @@
 
   // Other readable blocks on the page. `target` (optional) is excluded along
   // with anything inside or around it.
-  function collectBlocks(target, limit = 80) {
+  function collectBlocks(target, limit = 80, withPictures = false) {
     const out = [];
     for (const el of document.querySelectorAll(BLOCKS)) {
       if (out.length >= limit) break;
+      // Picture figures are offered as related images instead.
+      if (!withPictures && el.tagName === "FIGURE" && el.querySelector("img") && isImageBlock(el)) continue;
       if (host?.contains(el) || el.parentElement?.closest(BLOCKS) || el.closest(CHROME)) continue;
       if (target && (el === target || el.contains(target) || target.contains(el))) continue;
       const r = el.getBoundingClientRect();
@@ -230,20 +373,26 @@
     return out;
   }
 
-  function extract(el) {
+  async function extract(el) {
     const MAX = 12000;
-    let text = (el.innerText || el.alt || "").trim();
+    let text = (el.innerText || "").trim();
     const truncated = text.length > MAX;
     if (truncated) text = text.slice(0, MAX);
-    const imgs = el.tagName === "IMG" ? [el] : [...el.querySelectorAll("img")];
-    const images = imgs
-      .filter((i) => /^https?:/.test(i.currentSrc || i.src) && i.naturalWidth >= 100 && i.naturalHeight >= 100)
-      .slice(0, 3)
-      .map((i) => ({ url: i.currentSrc || i.src, alt: i.alt || "" }));
+    const media = mediaIn(el).slice(0, 3);
+    const found = await Promise.all(media.map(imageRef));
+    const images = media.map((m, i) => found[i] && { ...found[i], alt: altOf(m) }).filter(Boolean);
+    const kind = isImageBlock(el) ? "image" : "text";
+    const figure = el.closest("figure");
     return {
+      kind,
       text,
       truncated,
       images,
+      imageCount: media.length,
+      alt: media[0] ? altOf(media[0]) : "",
+      caption: (figure?.querySelector("figcaption")?.innerText || "").trim().slice(0, 600),
+      link: kind === "image" ? el.closest("a[href]")?.href || "" : "",
+      nearby: kind === "image" ? nearbyText(el) : null,
       title: document.title,
       url: location.origin + location.pathname,
       heading: headingFor(el),
@@ -263,8 +412,21 @@
 
   function cleanImage(img) {
     const src = img.currentSrc || img.src;
-    if (!/^(https?:|data:image\/)/.test(src)) return null;
+    if (!/^(https?:|data:image\/|blob:)/.test(src)) return null;
     return h("img", { src, alt: img.alt || "" });
+  }
+
+  // A canvas or inline SVG cannot be restyled inside the panel, so show a
+  // picture of it instead.
+  function snapshotImage(el) {
+    const r = el.getBoundingClientRect();
+    if (r.width < 100 || r.height < 80) return null;
+    const img = h("img", { alt: altOf(el) || "Graphic from the page" });
+    imageRef(el).then((ref) => {
+      if (ref?.dataUrl) img.src = ref.dataUrl;
+      else img.replaceWith(h("p", { text: "This graphic could not be copied into the panel." }));
+    });
+    return img;
   }
 
   function cleanInto(src, out) {
@@ -275,6 +437,11 @@
       }
       if (child.nodeType !== 1) continue;
       const tag = child.tagName.toUpperCase();
+      if (tag === "SVG" || tag === "CANVAS") {
+        const img = snapshotImage(child);
+        if (img) out.append(img);
+        continue;
+      }
       if (DROP.has(tag)) continue;
       const cs = getComputedStyle(child);
       if (cs.display === "none" || cs.visibility === "hidden") continue;
@@ -309,8 +476,11 @@
   function renderClean(el) {
     if (el.tagName === "IMG") return cleanImage(el) || h("p", { text: el.alt || "Image" });
     const tag = el.tagName.toUpperCase();
+    if (tag === "SVG" || tag === "CANVAS") return snapshotImage(el) || h("p", { text: "This graphic is too small to lift." });
     const wrapper = document.createElement(KEEP.has(tag) && tag !== "A" ? tag.toLowerCase() : "div");
     cleanInto(el, wrapper);
+    const bg = bgUrl(el);
+    if (bg && !wrapper.querySelector("img")) wrapper.prepend(h("img", { src: bg, alt: altOf(el) }));
     if (!wrapper.childNodes.length) wrapper.append(h("p", { text: (el.innerText || "").trim() || "Nothing readable in this block." }));
     return wrapper;
   }
@@ -345,7 +515,13 @@
     hintEl = null;
     if (!on) return hideOutline();
     ensureHost();
-    pickList = collectBlocks(null, 400).map((b) => b.el);
+    pickList = collectBlocks(null, 400, true).map((b) => b.el);
+    for (const m of document.querySelectorAll(MEDIA_EL)) {
+      const r = m.getBoundingClientRect();
+      if (r.width < 120 || r.height < 90 || host.contains(m) || m.closest(CHROME)) continue;
+      if (!pickList.some((el) => el.contains(m))) pickList.push(m);
+    }
+    pickList.sort((a, b) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1));
     pickIndex = -1;
     hintEl = h("div", { class: "hint", role: "status", text: "Pick a block: click one, or press ↑ ↓ then Enter. Esc cancels." });
     root.append(hintEl);
@@ -381,9 +557,13 @@
     const panel = h("article", { class: "panel", tabindex: "0", "aria-label": "Lifted content" }, closeBtn, content);
     const descText = h("div", { class: "desc-text" });
     const descBody = h("div", { "aria-live": "polite" }, descText);
-    const desc = h("aside", { class: "desc", "aria-label": "Description" }, h("h2", { class: "label", text: "What this is" }), descBody);
+    const descLabel = h("h2", { class: "label", text: "What this is" });
+    const desc = h("aside", { class: "desc", "aria-label": "Description" }, descLabel, descBody);
     const cards = h("div", { class: "cards" });
-    const relatedWrap = h("section", { class: "related-wrap", "aria-label": "Related on this page" }, h("h2", { class: "label", text: "Related on this page" }), cards);
+    const thumbs = h("div", { class: "thumbs" });
+    const textGroup = h("div", { class: "group" }, h("h2", { class: "label", text: "Related on this page" }), cards);
+    const imageGroup = h("div", { class: "group" }, h("h2", { class: "label", text: "Related images" }), thumbs);
+    const relatedWrap = h("section", { class: "related-wrap", "aria-label": "Related on this page" }, textGroup, imageGroup);
     const layout = h("div", { class: "layout" }, panel, desc, relatedWrap);
     const stage = h("div", { class: "stage", role: "dialog", "aria-modal": "true", "aria-label": "Lift Out" }, layout);
 
@@ -394,7 +574,7 @@
     backdrop.addEventListener("click", close);
 
     root.append(backdrop, ghost, stage);
-    ui = { backdrop, ghost, stage, layout, panel, content, desc, descBody, descText, relatedWrap, cards };
+    ui = { backdrop, ghost, stage, layout, panel, content, desc, descLabel, descBody, descText, relatedWrap, cards, thumbs, textGroup, imageGroup };
 
     restoreFocusTo = document.activeElement;
     bodyWasInert = document.body.inert;
@@ -424,9 +604,12 @@
   // rectangle on first open, or a related card's rectangle on a swap).
   function load(el, from) {
     current?.port?.disconnect();
-    current = { el, port: null, candidates: [] };
+    const isImage = isImageBlock(el);
+    current = { el, port: null, candidates: collectBlocks(el), imageCandidates: collectImages(el) };
 
     ui.content.replaceChildren(renderClean(el));
+    ui.content.classList.toggle("media", isImage);
+    ui.descLabel.textContent = isImage ? "What this shows" : "What this is";
     ui.panel.scrollTop = 0;
     placeGhost();
 
@@ -436,18 +619,23 @@
     ui.descText.before(h("div", { class: "skeleton", "aria-hidden": "true" }, h("i"), h("i"), h("i")));
     ui.descBody.setAttribute("aria-busy", "true");
 
-    ui.cards.replaceChildren(
-      ...[0, 1, 2].map(() => h("div", { class: "card placeholder", "aria-hidden": "true" }, h("div", { class: "skeleton" }, h("i"), h("i"), h("i"))))
-    );
+    const placeholders = (n, cls) => Array.from({ length: n }, () => h("div", { class: `card placeholder ${cls}`, "aria-hidden": "true" }, h("div", { class: "skeleton" }, h("i"), h("i"), h("i"))));
+    // Images lead when an image was lifted; otherwise related text leads.
+    ui.relatedWrap.append(...(isImage ? [ui.imageGroup, ui.textGroup] : [ui.textGroup, ui.imageGroup]));
+    ui.textGroup.hidden = false;
+    ui.cards.replaceChildren(...placeholders(3, ""));
+    const expectImages = isImage && current.imageCandidates.length > 0;
+    ui.imageGroup.hidden = !expectImages;
+    ui.thumbs.replaceChildren(...(expectImages ? placeholders(Math.min(3, current.imageCandidates.length), "thumb") : []));
 
     const to = ui.panel.getBoundingClientRect();
     animIn(ui.panel, [{ transform: flipFrames(from, to), opacity: 0.35 }, { transform: "none", opacity: 1 }], { duration: 560, easing: SPRING });
     animIn(ui.desc, [{ transform: "translateX(-56px) scale(.96)", opacity: 0 }, { transform: "none", opacity: 1 }], { duration: 460, delay: 240, easing: SPRING });
     animIn(ui.relatedWrap, [{ opacity: 0 }, { opacity: 1 }], { duration: 300, delay: 380 });
-    fanIn([...ui.cards.children], 420);
+    fanIn([...ui.relatedWrap.querySelectorAll(".card")], 420);
 
     ui.panel.focus({ preventScroll: true });
-    request(el);
+    request(el).catch(() => ui && descMessage("Something went wrong while reading this block."));
   }
 
   function fanIn(cards, delay = 0) {
@@ -474,19 +662,26 @@
     }
   }
 
-  function showRelated(session, items) {
-    if (!items.length) {
-      ui.cards.replaceChildren(h("p", { class: "quiet", text: "Nothing else on this page is closely related." }));
-      return;
-    }
+  function showRelated(session, items, images) {
     const cards = items.map(({ id, reason }) => {
       const cand = session.candidates[id];
       const card = h("button", { class: "card", type: "button" }, h("span", { class: "why", text: reason || cand.heading || "Related block" }), h("span", { class: "snip", text: cand.text }));
       card.addEventListener("click", () => swapTo(cand.el, card));
       return card;
     });
-    ui.cards.replaceChildren(...cards);
-    fanIn(cards);
+    const thumbs = images.map(({ id, reason }) => {
+      const cand = session.imageCandidates[id];
+      const card = h("button", { class: "card thumb", type: "button" }, h("img", { src: cand.src, alt: cand.alt }), h("span", { class: "why", text: reason || cand.alt || "Related image" }));
+      card.addEventListener("click", () => swapTo(cand.el, card));
+      return card;
+    });
+
+    ui.imageGroup.hidden = !thumbs.length;
+    ui.thumbs.replaceChildren(...thumbs);
+    ui.textGroup.hidden = !cards.length && thumbs.length > 0;
+    if (cards.length) ui.cards.replaceChildren(...cards);
+    else ui.cards.replaceChildren(h("p", { class: "quiet", text: "Nothing else on this page is closely related." }));
+    fanIn([...ui.relatedWrap.querySelectorAll("button.card")]);
   }
 
   function swapTo(el, card) {
@@ -496,16 +691,17 @@
     load(el, from);
   }
 
-  function request(el) {
+  async function request(el) {
     const session = current;
-    const block = extract(el);
-    session.candidates = collectBlocks(el);
+    const block = await extract(el);
+    if (current !== session || !ui) return; // closed or swapped while snapshotting
 
     let port;
     try {
       port = chrome.runtime.connect({ name: "lift-out" });
     } catch {
       ui.cards.replaceChildren();
+      ui.imageGroup.hidden = true;
       return descMessage("Lift Out was updated or reloaded. Reload this page to get descriptions again.");
     }
     session.port = port;
@@ -535,12 +731,14 @@
           descMessage("Add your Anthropic API key to get descriptions and related items.", {
             button: { label: "Open settings", onClick: () => chrome.runtime.sendMessage({ type: "open-options" }) },
           });
+          ui.imageGroup.hidden = true;
           ui.cards.replaceChildren(h("p", { class: "quiet", text: "Related items need an API key." }));
           break;
         case "related":
-          showRelated(session, msg.items || []);
+          showRelated(session, msg.items || [], msg.images || []);
           break;
         case "related-error":
+          ui.imageGroup.hidden = true;
           ui.cards.replaceChildren(h("p", { class: "quiet", text: "Could not look for related items." }));
           break;
       }
@@ -554,6 +752,7 @@
       type: "start",
       block,
       candidates: session.candidates.map((c, id) => ({ id, heading: c.heading, text: c.text })),
+      imageCandidates: session.imageCandidates.map((c, id) => ({ id, url: c.src, alt: c.alt, caption: c.caption, heading: c.heading })),
     });
   }
 
