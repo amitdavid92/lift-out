@@ -84,6 +84,16 @@
       background: var(--card); border-radius: 16px; padding: 20px 22px 22px; max-height: 62vh; overflow: auto;
       box-shadow: 0 20px 60px rgba(0,0,0,.35); border: 1px solid var(--line);
     }
+    .desc-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 10px; }
+    .desc-head .label { margin: 0; }
+    .toggle {
+      min-height: 36px; padding: 4px 14px; border-radius: 999px; border: 2px solid var(--line); background: transparent;
+      color: var(--accent); font: 600 14px system-ui, sans-serif; cursor: pointer; white-space: nowrap;
+    }
+    .toggle:hover { border-color: var(--accent); }
+    .desc-text { cursor: pointer; }
+    .desc-text.short .rest { display: none; }
+    .desc-text.short .lead { font-size: 20px; }
     .label { font-size: 13px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); margin: 0 0 10px; }
     .desc-text { white-space: pre-wrap; font-size: 18px; line-height: 1.65; }
     .desc-text.streaming::after {
@@ -555,10 +565,19 @@
     const content = h("div", { class: "content" });
     const closeBtn = h("button", { class: "close", type: "button", "aria-label": "Put back (Escape)", text: "×" });
     const panel = h("article", { class: "panel", tabindex: "0", "aria-label": "Lifted content" }, closeBtn, content);
-    const descText = h("div", { class: "desc-text" });
+    // The model's first paragraph is a one-sentence summary; `lead` holds it
+    // and `rest` holds everything after, so "short" is just hiding `rest`.
+    const descLead = h("span", { class: "lead" });
+    const descRest = h("span", { class: "rest" });
+    const descText = h("div", { class: "desc-text", id: "lift-desc", title: "Click to switch between one sentence and the full description" }, descLead, descRest);
     const descBody = h("div", { "aria-live": "polite" }, descText);
     const descLabel = h("h2", { class: "label", text: "What this is" });
-    const desc = h("aside", { class: "desc", "aria-label": "Description" }, descLabel, descBody);
+    const descToggle = h("button", { class: "toggle", type: "button", "aria-controls": "lift-desc" });
+    const desc = h("aside", { class: "desc", "aria-label": "Description" }, h("div", { class: "desc-head" }, descLabel, descToggle), descBody);
+    descToggle.addEventListener("click", () => setShort(!shortDesc));
+    descText.addEventListener("click", () => {
+      if (!shadow.getSelection?.()?.toString() && !getSelection().toString()) setShort(!shortDesc);
+    });
     const cards = h("div", { class: "cards" });
     const thumbs = h("div", { class: "thumbs" });
     const textGroup = h("div", { class: "group" }, h("h2", { class: "label", text: "Related on this page" }), cards);
@@ -574,7 +593,7 @@
     backdrop.addEventListener("click", close);
 
     root.append(backdrop, ghost, stage);
-    ui = { backdrop, ghost, stage, layout, panel, content, desc, descLabel, descBody, descText, relatedWrap, cards, thumbs, textGroup, imageGroup };
+    ui = { backdrop, ghost, stage, layout, panel, content, desc, descLabel, descBody, descText, descLead, descRest, descToggle, relatedWrap, cards, thumbs, textGroup, imageGroup };
 
     restoreFocusTo = document.activeElement;
     bodyWasInert = document.body.inert;
@@ -614,8 +633,10 @@
     placeGhost();
 
     ui.descBody.replaceChildren(ui.descText);
-    ui.descText.textContent = "";
+    ui.descLead.textContent = "";
+    ui.descRest.textContent = "";
     ui.descText.classList.remove("streaming");
+    setShort(shortDesc);
     ui.descText.before(h("div", { class: "skeleton", "aria-hidden": "true" }, h("i"), h("i"), h("i")));
     ui.descBody.setAttribute("aria-busy", "true");
 
@@ -647,6 +668,24 @@
         easing: SPRING,
       });
     });
+  }
+
+  // Whether descriptions are collapsed to their first sentence. Kept between
+  // lifts so someone who prefers short descriptions only has to ask once.
+  let shortDesc = false;
+
+  function setShort(on) {
+    shortDesc = on;
+    if (!ui) return;
+    ui.descText.classList.toggle("short", on);
+    ui.descToggle.textContent = on ? "Full description" : "One sentence";
+    ui.descToggle.setAttribute("aria-expanded", String(!on));
+  }
+
+  function renderDesc(text) {
+    const cut = text.indexOf("\n\n");
+    ui.descLead.textContent = cut === -1 ? text : text.slice(0, cut);
+    ui.descRest.textContent = cut === -1 ? "" : text.slice(cut);
   }
 
   function descMessage(text, { button } = {}) {
@@ -713,7 +752,8 @@
         case "delta":
           ui.descBody.querySelector(".skeleton")?.remove();
           ui.descText.classList.add("streaming");
-          ui.descText.append(msg.text);
+          session.desc = (session.desc || "") + msg.text;
+          renderDesc(session.desc);
           break;
         case "desc-done":
           finished = true;

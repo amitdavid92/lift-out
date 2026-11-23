@@ -21,7 +21,7 @@ const PLAIN_TEXT = "Output plain text only, with no markdown, headings or bullet
 const DESCRIBE_SYSTEM = `You help people understand one block of a web page that they have lifted out to read on its own. Many readers use a screen reader, have low vision or dyslexia, or find dense pages hard to process, so your words may be read aloud and must stand on their own.
 
 Write the explanation like this:
-- Open with one sentence saying what the block is, for example a paragraph from a news article, a cookie consent banner, or a pricing table.
+- Open with a single sentence of at most 25 words, as its own paragraph, that works as the whole answer by itself: what the block is and the main thing it says. For example: "A news paragraph saying the council approved a tram extension, paid for by borrowing and a charge on local businesses." Readers can collapse your description to just this sentence, so the rest must add detail without being needed to understand it.
 - Then say what it means in plain language: short sentences, everyday words, and a brief definition for any jargon or acronym you keep.
 - If images are attached, describe what each one shows, including the figures or trend in any chart, because the reader may not be able to see it.
 - If the block asks the reader to do something (a button, a form, a consent choice), say what the options are and what each one does.
@@ -33,7 +33,7 @@ ${UNTRUSTED}`;
 const IMAGE_SYSTEM = `You help people understand one image from a web page that they have lifted out to look at on its own. Many readers are blind or have low vision and will hear your words through a screen reader. Others can see the image but find it hard to interpret. Your description has to carry everything the image communicates.
 
 Write it like this:
-- Open with one sentence saying what kind of image this is and what it is of, for example a bar chart of costs, a street photo, a route map, or a screenshot of a settings page.
+- Open with a single sentence of at most 25 words, as its own paragraph, that works as the whole answer by itself: what kind of image this is and the main thing it shows. For example: "A bar chart showing every cost estimate rose between 2023 and 2025, with utility relocation more than doubling." Readers can collapse your description to just this sentence, so the rest must add detail without being needed to understand it.
 - Then describe what it shows, most important thing first. For a chart or graph, say what is measured, the axes and units, the main comparison or trend, and the specific values you can read. For a diagram or map, name the parts and how they connect. For a screenshot or any image containing text, quote the text that matters. For a photo, describe the scene, the setting and what is happening.
 - Then say in a sentence or two what the image adds to the page, using the caption and nearby text you are given. If the image shows something the text does not say, or disagrees with it, point that out. Bring in nearby text only where it bears on the image; do not summarise the rest of the page.
 - If a detail is too small or unclear to read, say so instead of guessing.

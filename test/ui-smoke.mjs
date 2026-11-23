@@ -100,6 +100,18 @@ check("description streamed and marked done", state.desc > 100 && state.busy ===
 check("three related cards", state.cards === 3);
 check("focus moved into panel, page inert", state.focusInPanel && state.inert);
 
+// 2b. One click collapses the description to its first sentence; it stays that way.
+const descState = () => page.evaluate(() => {
+  const s = document.querySelector("[data-lift-out]").shadowRoot;
+  return { shown: s.querySelector(".desc-text").innerText.trim(), button: s.querySelector(".toggle").textContent, expanded: s.querySelector(".toggle").getAttribute("aria-expanded") };
+});
+await page.evaluate(() => document.querySelector("[data-lift-out]").shadowRoot.querySelector(".toggle").click());
+let d = await descState();
+check("toggle collapses to one sentence", d.shown === "This is the opening paragraph of a local news article." && d.button === "Full description" && d.expanded === "false");
+await page.evaluate(() => document.querySelector("[data-lift-out]").shadowRoot.querySelector(".desc-text").click());
+d = await descState();
+check("clicking the text restores the full description", d.shown.length > 200 && d.button === "One sentence");
+
 // 3. Tab stays inside the dialog.
 for (let i = 0; i < 8; i++) await page.keyboard.press("Tab");
 check("focus trapped in dialog", await shadowEval(() => !!document.querySelector("[data-lift-out]").shadowRoot.activeElement));

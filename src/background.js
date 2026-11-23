@@ -186,8 +186,18 @@ function togglePick(tab) {
 }
 
 chrome.action.onClicked.addListener(togglePick);
+// Boss key: open the page that explains Lift Out next to the current tab, or
+// close it if it is already open (Chrome then returns to the tab it came from).
+async function toggleAbout(tab) {
+  const url = chrome.runtime.getURL("about/about.html");
+  const open = (await chrome.runtime.getContexts({ contextTypes: ["TAB"] })).filter((c) => c.documentUrl?.startsWith(url));
+  if (open.length) return chrome.tabs.remove(open.map((c) => c.tabId));
+  chrome.tabs.create({ url, openerTabId: tab?.id, index: tab ? tab.index + 1 : undefined });
+}
+
 chrome.commands.onCommand.addListener((command, tab) => {
   if (command === "toggle-pick") togglePick(tab);
+  if (command === "boss-key") toggleAbout(tab);
 });
 
 chrome.runtime.onInstalled.addListener(async ({ reason }) => {
@@ -195,3 +205,7 @@ chrome.runtime.onInstalled.addListener(async ({ reason }) => {
   const { apiKey } = await chrome.storage.local.get("apiKey");
   if (!apiKey) chrome.runtime.openOptionsPage();
 });
+
+// Chrome offers no way to fire a keyboard command from a test, so the
+// end-to-end tests call this directly.
+self.liftOutTest = { toggleAbout };
