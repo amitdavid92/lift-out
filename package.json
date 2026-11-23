@@ -1,0 +1,19 @@
+{
+  "name": "lift-out",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Chrome extension: lift any block out of a page, get a plain-language description and related items.",
+  "scripts": {
+    "build": "esbuild src/background.js --bundle --format=iife --target=chrome120 --outfile=dist/background.js",
+    "test:ui": "node test/ui-smoke.mjs",
+    "test:api": "node test/api-smoke.mjs"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "latest"
+  },
+  "devDependencies": {
+    "esbuild": "latest",
+    "puppeteer-core": "latest"
+  }
+}
